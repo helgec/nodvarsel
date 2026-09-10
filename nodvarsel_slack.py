@@ -19,7 +19,7 @@ import requests
 load_dotenv()
 
 # --- KONFIGURASJON ---
-RSS_URL = "https://www.nodvarsel.no/api/rss/aktive"
+RSS_URL = "https://www.nodvarsel.no/rss/rss-aktive-nodvarsler/"
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 
 if not SLACK_WEBHOOK_URL:
