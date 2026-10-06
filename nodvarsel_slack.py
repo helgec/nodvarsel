@@ -15,6 +15,10 @@ from dotenv import load_dotenv
 import feedparser
 import requests
 
+# Importer status-hjelperen
+sys.path.append("/home/nrknyheter")
+from status_helper import update_status
+
 # Laster miljøvariabler fra .env umiddelbart etter import
 load_dotenv()
 
@@ -23,7 +27,9 @@ RSS_URL = "https://www.nodvarsel.no/rss/rss-aktive-nodvarsler/"
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL")
 
 if not SLACK_WEBHOOK_URL:
-    raise ValueError("Kritisk feil: SLACK_WEBHOOK_URL er ikke konfigurert i .env-filen.")
+    err_msg = "Kritisk feil: SLACK_WEBHOOK_URL er ikke konfigurert i .env-filen."
+    update_status("nodvarsel", "Nødvarsel-overvåker", status="ERROR", error_msg=err_msg)
+    raise ValueError(err_msg)
 
 # Filsti for å huske hvilke varsler som allerede er pushet (unngå duplikater)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -97,34 +103,49 @@ def send_to_slack(entry):
         resp.raise_for_status()
         logging.info(f"Varslet Slack vellykket om: {title}")
     except requests.exceptions.RequestException as e:
-        logging.error(f"Klarte ikke å sende til Slack. Feil: {e}")
+        err_msg = f"Klarte ikke å sende til Slack. Feil: {e}"
+        logging.error(err_msg)
+        update_status("nodvarsel", "Nødvarsel-overvåker", status="ERROR", error_msg=err_msg)
 
 
 def main():
     logging.info("Sjekker Nødvarsel.no for nye aktive varsler...")
-    feed = feedparser.parse(RSS_URL)
     
-    if feed.bozo and not feed.entries:
-        logging.error(f"Feil ved parsing av RSS-feed: {feed.bozo_exception}")
+    try:
+        feed = feedparser.parse(RSS_URL)
+        
+        if feed.bozo and not feed.entries:
+            err_msg = f"Feil ved parsing av RSS-feed: {feed.bozo_exception}"
+            logging.error(err_msg)
+            update_status("nodvarsel", "Nødvarsel-overvåker", status="ERROR", error_msg=err_msg)
+            sys.exit(1)
+
+        seen = load_seen()
+        new_alerts_sent = False
+
+        for entry in feed.entries:
+            alert_id = entry.get("id", entry.get("link"))
+
+            if alert_id not in seen:
+                logging.info(f"Nytt varsel oppdaget: {entry.get('title')}")
+                send_to_slack(entry)
+                seen.append(alert_id)
+                new_alerts_sent = True
+
+        if new_alerts_sent:
+            save_seen(seen)
+            logging.info("Listen over publiserte varsler ble oppdatert.")
+        else:
+            logging.info("Ingen nye aktive nødvarsler funnet.")
+            
+        # Alt gikk bra
+        update_status("nodvarsel", "Nødvarsel-overvåker", status="OK")
+
+    except Exception as e:
+        err_msg = f"Uventet feil under kjøring: {e}"
+        logging.error(err_msg)
+        update_status("nodvarsel", "Nødvarsel-overvåker", status="ERROR", error_msg=err_msg)
         sys.exit(1)
-
-    seen = load_seen()
-    new_alerts_sent = False
-
-    for entry in feed.entries:
-        alert_id = entry.get("id", entry.get("link"))
-
-        if alert_id not in seen:
-            logging.info(f"Nytt varsel oppdaget: {entry.get('title')}")
-            send_to_slack(entry)
-            seen.append(alert_id)
-            new_alerts_sent = True
-
-    if new_alerts_sent:
-        save_seen(seen)
-        logging.info("Listen over publiserte varsler ble oppdatert.")
-    else:
-        logging.info("Ingen nye aktive nødvarsler funnet.")
 
 
 if __name__ == "__main__":
